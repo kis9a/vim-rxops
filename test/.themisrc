@@ -1,0 +1,146 @@
+let s:root = fnamemodify(expand('<sfile>:p:h:h'), ':p')
+execute 'set runtimepath^=' . fnameescape(s:root)
+set nomore
+set encoding=utf-8
+set noswapfile
+runtime plugin/rxops.vim
+
+" A fresh scratch buffer holding {lines}, with the undo block closed.
+function! RxopsTestBuffer(lines) abort
+  enew!
+  setlocal buftype=nofile bufhidden=wipe
+  call setline(1, a:lines)
+  let &undolevels = &undolevels
+endfunction
+
+function! RxopsTestLines() abort
+  return getline(1, '$')
+endfunction
+
+" Close the current undo block so that the next change is undone alone.
+function! RxopsTestCloseUndo() abort
+  let &undolevels = &undolevels
+endfunction
+
+" Save and restore registers that tests write (never lose the real clipboard).
+let s:regs = ['"', '+', '*']
+function! RxopsTestSaveRegs() abort
+  let l:saved = {}
+  for l:r in s:regs
+    if l:r ==# '"' || has('clipboard')
+      let l:saved[l:r] = [getreg(l:r, 1, 1), getregtype(l:r)]
+    endif
+  endfor
+  return l:saved
+endfunction
+
+function! RxopsTestRestoreRegs(saved) abort
+  for [l:r, l:v] in items(a:saved)
+    call setreg(l:r, l:v[0], l:v[1])
+  endfor
+endfunction
+
+" Messages printed while running {cmd}.
+function! RxopsTestMessages(cmd) abort
+  return execute(a:cmd)
+endfunction
+
+" Run {script} (a List of Ex lines) at the top level of a child editor of the
+" same kind, after loading the plugin. It is not under the try of themis. The script appends to the List s:out;
+" its lines are returned. Used where function-search-undo matters: @/ is put
+" back only when the outermost function returns, and a test is a function.
+" With a second argument 1, Vim runs in Ex mode without -s, where an error
+" does not make it exit (Neovim is the same either way).
+function! RxopsTestTopLevel(script, ...) abort
+  let l:dir = tempname()
+  call mkdir(l:dir, 'p')
+  let l:out = l:dir . '/out.txt'
+  " Vim -es exits at the first error of the script: write on the way out.
+  " A script may define RxopsAtExit() to add lines then.
+  let l:head = [
+        \ 'set rtp^=' . fnameescape(s:root),
+        \ 'set nomore noswapfile',
+        \ 'runtime plugin/rxops.vim',
+        \ 'let s:out = []',
+        \ 'autocmd VimLeavePre * call writefile(s:out + (exists("*RxopsAtExit") ? RxopsAtExit() : []), '
+        \   . string(l:out) . ')']
+  let l:tail = ['qall!']
+  call writefile(l:head + a:script + l:tail, l:dir . '/t.vim')
+  if has('nvim')
+    let l:argv = [v:progpath, '--headless', '-u', 'NONE', '-i', 'NONE', '-n', '-S', l:dir . '/t.vim']
+  else
+    let l:argv = [v:progpath, '-Nu', 'NONE', '-U', 'NONE', '-i', 'NONE', '-n', '-e', '-s', '-S', l:dir . '/t.vim']
+    if a:0 && a:1
+      call remove(l:argv, index(l:argv, '-s'))
+    endif
+  endif
+  call system(join(map(l:argv, 'shellescape(v:val)'), ' ') . ' </dev/null')
+  let l:lines = filereadable(l:out) ? readfile(l:out) : ['(no output)']
+  call delete(l:dir, 'rf')
+  return l:lines
+endfunction
+
+" Make the buffer nomodifiable right after its {n}th change, to make an
+" operation fail half-way. Returns a function that removes the hook.
+function! RxopsTestFailAfter(n) abort
+  let g:rxops_test_changes = 0
+  let g:rxops_test_fail_after = a:n
+  if has('nvim')
+    lua << LUA
+    vim.api.nvim_buf_attach(0, false, {on_lines = function()
+      vim.g.rxops_test_changes = vim.g.rxops_test_changes + 1
+      if vim.g.rxops_test_changes == vim.g.rxops_test_fail_after then
+        vim.bo.modifiable = false
+        return true
+      end
+    end})
+LUA
+    return function('RxopsTestNoop')
+  endif
+  let s:listener = listener_add('RxopsTestCount', bufnr(''), 1)
+  return function('RxopsTestRemoveListener')
+endfunction
+
+function! RxopsTestCount(...) abort
+  let g:rxops_test_changes += 1
+  if g:rxops_test_changes == g:rxops_test_fail_after
+    setlocal nomodifiable
+  endif
+endfunction
+
+function! RxopsTestRemoveListener() abort
+  call listener_remove(s:listener)
+endfunction
+
+function! RxopsTestNoop() abort
+endfunction
+
+" Throw from a change listener right after the {n}th change. :s finishes the
+" line it is on and the exception arrives afterwards (both editors).
+function! RxopsTestThrowAfter(n) abort
+  let g:rxops_test_changes = 0
+  let g:rxops_test_fail_after = a:n
+  if has('nvim')
+    lua << LUA
+    vim.api.nvim_buf_attach(0, false, {on_lines = function()
+      vim.g.rxops_test_changes = vim.g.rxops_test_changes + 1
+      if vim.g.rxops_test_changes == vim.g.rxops_test_fail_after then
+        error('rxops test failure')
+      end
+      if vim.g.rxops_test_changes > vim.g.rxops_test_fail_after then
+        return true
+      end
+    end})
+LUA
+    return function('RxopsTestNoop')
+  endif
+  let s:listener = listener_add('RxopsTestThrow', bufnr(''), 1)
+  return function('RxopsTestRemoveListener')
+endfunction
+
+function! RxopsTestThrow(...) abort
+  let g:rxops_test_changes += 1
+  if g:rxops_test_changes == g:rxops_test_fail_after
+    throw 'rxops test failure'
+  endif
+endfunction

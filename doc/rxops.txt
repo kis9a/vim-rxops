@@ -1,0 +1,453 @@
+*rxops.txt*	Operate on the last Vim search, by line or by match.
+
+Author:  kis9a
+License: MIT
+
+==============================================================================
+CONTENTS						*rxops-contents*
+
+  1. Introduction ............................ |rxops-intro|
+  2. Quick start ............................. |rxops-quickstart|
+  3. Commands ................................ |rxops-commands|
+  4. Mappings ................................ |rxops-mappings|
+  5. Options ................................. |rxops-options|
+  6. Functions ............................... |rxops-functions|
+  7. Registers and messages .................. |rxops-registers|
+  8. Privacy ................................. |rxops-privacy|
+  9. Limitations ............................. |rxops-limitations|
+
+==============================================================================
+1. Introduction						*rxops-intro*
+
+vim-rxops — Operate on the last Vim search, by line or by match.
+
+Make a search any way you like (|/|, |star|, an abbreviation, ...), then
+delete, keep, yank, list, align, fold, run a macro on, or substitute inside
+what it matched -- either the whole lines (`...Lines`) or only the matched
+text (`...Matches`). The plugin only reads |@/|; how the pattern was made
+does not matter.
+
+- Without a range every command works on the whole buffer.
+- |@/| is the same after every command (|function-search-undo|).
+- One |u| undoes a whole command.
+- No keys are mapped. Use the commands, the |<Plug>| mappings or short
+  aliases of your own (|rxops-aliases|).
+
+Requirements:
+- Vim 8.2.1978 or later (|<Cmd>|), or Neovim 0.9 or later.
+- |:RxopsAlignMatches| needs vim-easy-align
+  (https://github.com/junegunn/vim-easy-align).
+
+==============================================================================
+2. Quick start						*rxops-quickstart*
+
+With these lines >
+	id=foo-123 name=foo
+	name=foo-456
+	id=foo-789 name=foo
+<
+search for `id=\S\+` (`/id=\S\+<CR>`) and then >
+	:RxopsSubstituteMatches /foo/bar/g
+<	changes only the matched `id=...` parts: >
+	id=bar-123 name=foo
+	name=foo-456
+	id=bar-789 name=foo
+<	while >
+	:RxopsSubstituteLines /foo/bar/g
+<	changes the whole matching lines: >
+	id=bar-123 name=bar
+	name=foo-456
+	id=bar-789 name=bar
+<
+Either way the search is still `id=\S\+`, so `n` and the next command use
+it.
+
+To do the same to another search, search again and repeat the command
+line with |@:|. Each command reads |@/| when it runs, and the range is read
+again as typed: >
+	/name=\S\+<CR>
+	@:
+<	A command run from a mapping with |<Cmd>| does not go into |@:|; press
+	the same key again. The |<Plug>| mappings that stop on the command line
+	do (the line you finish with <CR> is the last command line).
+
+==============================================================================
+3. Commands						*rxops-commands*
+
+All commands take a range and default to the whole buffer (`-range=%`),
+except |:RxopsFoldLines|. If |@/| is empty they report
+`E35: No previous regular expression` and do nothing. The commands that take
+no argument can be followed by `|` and another command (|:bar|).
+A closed fold does not widen the range any further than Vim does for the
+typed command (`:2` inside a closed fold is line 2 only): folding is off
+in the window while the internal commands run, and manual folds and their
+open/closed state stay.
+
+The `...Matches` commands find matches as `:s//g` does: matches do not
+overlap, and after a zero-width match the search goes on one character
+later. The commands that work on the matched text (Delete, Keep and
+YankMatches) skip empty matches. A match that spans lines (`\n`, `\_.`)
+becomes one line per line it spans; a NUL inside a line (|NL-used-for-Nul|)
+stays in its line.
+
+:[range]RxopsDeleteLines				*:RxopsDeleteLines*
+	Delete the lines that match. The deleted lines go to the registers
+	(|rxops-registers|).
+
+:[range]RxopsKeepLines					*:RxopsKeepLines*
+	Delete the lines that do not match; keep the matching ones. The
+	deleted lines go to the registers.
+
+:[range]RxopsDeleteMatches				*:RxopsDeleteMatches*
+	Delete the matched text. Each match goes to the registers as a line.
+	When nothing but empty matches is found, nothing is deleted and the
+	registers are left alone.
+
+:[range]RxopsKeepMatches				*:RxopsKeepMatches*
+	Replace the range with its matches, one match per line. A match that
+	starts in the range and runs past its end also replaces the lines it
+	touches (so no text is doubled); other lines outside the range are
+	untouched. Registers are not changed.
+
+:[range]RxopsYankLines					*:RxopsYankLines*
+	Yank the matching lines. The buffer and the cursor do not change.
+
+:[range]RxopsYankMatches				*:RxopsYankMatches*
+	Yank the matched text, one match per line.
+
+:[range]RxopsQuickfixLines[!]				*:RxopsQuickfixLines*
+	Make a new |quickfix| list with one item per matching line. The column
+	is the first match on the line. With [!] the lines that do NOT match
+	are listed (column 1). The list title is the command and the pattern.
+	Unlike |:vimgrep| this reads the buffer, so unsaved changes and the
+	range count. Open the list with |:copen|. When nothing matches the
+	current list is left alone.
+
+:[range]RxopsLoclistLines[!]				*:RxopsLoclistLines*
+	Like |:RxopsQuickfixLines| but makes a |location-list| for the
+	current window (|:lopen|).
+
+:[range]RxopsQuickfixMatches			*:RxopsQuickfixMatches*
+	Make a new quickfix list with one item per match: three matches on a
+	line are three items. Zero-width matches are items too.
+
+:[range]RxopsLoclistMatches				*:RxopsLoclistMatches*
+	Like |:RxopsQuickfixMatches| with a location list.
+
+:[range]RxopsAlignMatches [arg]				*:RxopsAlignMatches*
+	Align the lines at the matches with vim-easy-align. It runs
+	`:[range]EasyAlign [arg]//`; the empty pattern is the last search.
+	[arg] is one of: nothing (first match), `*` (every match), `**`
+	(every match, alternating left/right), `-` (last match), `N` (N-th
+	match) or `-N` (N-th from the end). Anything else is an error.
+
+:RxopsFoldLines						*:RxopsFoldLines*
+	Fold away the lines that do not match, in the current window, so
+	that only the matching lines are shown. It sets 'foldmethod' to
+	"expr" with a 'foldexpr' that tests each line, so the folds follow
+	edits. Run it again:
+	- with the same search: restore the folds as they were.
+	- after another search: narrow to the new search (the original folds
+	  are still kept for the restore).
+	- with an empty |@/|: restore as well.
+	In a window split from a narrowed one (which has no saved state) it
+	resets the fold options to their global values.
+	How the original is kept: in a named file buffer the folds are saved
+	with |:mkview|, so manual folds and open/closed state come back.
+	Only the fold commands of the view file are run. In other buffers
+	(no name, or 'buftype' set), and when the buffer was given another
+	name while narrowed (|:file|, |:saveas|), only the fold options are
+	restored; manual folds are lost and the message says so.
+	See also |rxops-limitations|.
+
+:[range]RxopsMacroLines[!] {reg}			*:RxopsMacroLines*
+	Run the macro in register {reg} on every matching line, like
+	`:g//normal! @{reg}`. With [!] on every line that does not match.
+	{reg} is one of a-z, A-Z, 0-9, ", : (the last command line, |@:|),
+	+ or *. |:global| follows lines the macro adds or deletes. With `:`,
+	a range of fixed line numbers in that command (`2s/a/b/`) works on
+	the same line every time, as with `:g//normal @:`.
+	See |rxops-macro-failures|.
+
+:[range]RxopsMacroMatches {reg}				*:RxopsMacroMatches*
+	Run the macro with the cursor at the start of each match. All matches
+	are found first and visited from the last one backwards, so edits
+	after the cursor do not shift matches still to be visited. A macro
+	that edits before the cursor, or adds or deletes lines, shifts them.
+	{reg} as for |:RxopsMacroLines|. See |rxops-macro-failures|.
+
+						*rxops-macro-failures*
+A run of the macro can fail in two ways, and both commands treat them as
+the typed `:g//normal! @{reg}` does:
+- An error: a command in the macro gives an error message (E486 from a
+  search with 'nowrapscan', E117, ...). The rest of the macro is dropped
+  and the command stops: no further lines or matches are visited. Vim
+  shows the error, with "Error detected while processing function" lines
+  before it (it happened inside the plugin), so expect a |hit-enter|
+  prompt; rxops adds nothing.
+- A failed motion: a motion fails without a message (`f=` on a line
+  without `=`, `j` on the last line). Vim only beeps. The rest of the macro
+  is dropped for that line or match, and the command goes on with the next
+  ones. Afterwards rxops warns, e.g. `macro failed on 1 of 3 lines`.
+An error under |:silent!| inside the macro does not stop the macro, so it
+is no failure; when a motion fails later in the same run, that run is a
+failed motion. A run that is cut short after any error is taken as
+stopped by that error, unless nothing was added to |:messages| during the
+run (an error under |:silent!| is not kept there). With a short message
+history ('messagesopt' "history:" below 20) this is not checked: every
+such run stops, also after a |:silent!| error and a failed motion. A
+register set with `:let @q = ":cmd\<CR>"` is
+linewise and runs a NL (a move down) after the command; on the last line
+that move fails, as it does for `@q` itself. Record the macro with |q|, or
+use `setreg('q', ":cmd\<CR>", 'c')`.
+
+:[range]RxopsSubstituteLines /{pattern}/{string}/[flags]
+                                                       *:RxopsSubstituteLines*
+	Substitute in the matching lines: the same as
+	`:[range]g//s/{pattern}/{string}/[flags]e`. The `e` flag is always
+	added, so lines without {pattern} are no error. [flags] are letters
+	and are passed to |:s| as they are (`c` asks as usual). It is your
+	own |:s|, so 'gdefault' applies. It runs under |:keeppatterns|: |@/|
+	and the search history do not change, and |:&| does not repeat it.
+	When no line in the range matches, nothing runs and it says
+	`0 lines changed`; otherwise the messages are those of |:s|.
+
+:[range]RxopsSubstituteMatches /{pattern}/{string}/[flags]
+                                                     *:RxopsSubstituteMatches*
+	Substitute only inside each match of the last search. Without `g`
+	only the first {pattern} inside each match is replaced (as |:s|
+	does for a line). [flags] may be `g`, `i` (ignore case) and `I`
+	(match case); anything else is an error. Reports
+	`N matches changed`: the number of matches whose text changed.
+	{pattern} is read like the pattern of |:s|: without `i` or `I` the
+	current 'ignorecase' and 'smartcase' decide the case, |/\c| or |/\C|
+	in {pattern} wins over `i` and `I`, and 'magic' is honoured. As for
+	|:s|, 'gdefault' turns the meaning of `g` around. Inside each match
+	the work is done by |substitute()|, so {string} differs from |:s| in
+	three ways: `\n` (and a line break from `\=`) splits the line, `~` is
+	a literal `~`, and `&` is the whole match also with 'nomagic' (where
+	|:s| takes `\&` for it).
+
+Both substitute commands:
+- The delimiter is the first character; any single-byte character except
+  a letter, a digit, `\`, `"`, `|` and white space. Inside {pattern} and
+  {string} it can be escaped with `\`. As for |:s|, inside `[...]` of
+  {pattern} (`\[...]` with 'nomagic') it does not end {pattern}; a `[`
+  that is not closed is an error. `\{delimiter}` is passed to the
+  regexp as it is, as |:s| does (`\.` is a literal dot, `\+` is a
+  multi), except that with `?` as the delimiter `\?` is a literal `?`.
+- `\=` in {string} is an expression (|sub-replace-expression|), as for
+  |:s|. `|` in {string} is literal text.
+- An invalid argument changes nothing and prints a short usage.
+
+						*rxops-aliases*
+The plugin defines only these long names. Short aliases for your vimrc: >
+	command! -range=% -bar DL <line1>,<line2>RxopsDeleteLines
+	command! -range=% -bar KL <line1>,<line2>RxopsKeepLines
+	command! -range=% -bar DM <line1>,<line2>RxopsDeleteMatches
+	command! -range=% -bar KM <line1>,<line2>RxopsKeepMatches
+	command! -range=% -bar YL <line1>,<line2>RxopsYankLines
+	command! -range=% -bar YM <line1>,<line2>RxopsYankMatches
+	command! -range=% -bang -bar QL
+	      \ <line1>,<line2>RxopsQuickfixLines<bang>
+	command! -range=% -bang -bar LL
+	      \ <line1>,<line2>RxopsLoclistLines<bang>
+	command! -range=% -bar QM <line1>,<line2>RxopsQuickfixMatches
+	command! -range=% -bar LM <line1>,<line2>RxopsLoclistMatches
+	command! -range=% -nargs=? AM
+	      \ <line1>,<line2>RxopsAlignMatches <args>
+	command! -bar FL RxopsFoldLines
+	command! -range=% -bang -nargs=1 ML
+	      \ <line1>,<line2>RxopsMacroLines<bang> <args>
+	command! -range=% -nargs=1 MM
+	      \ <line1>,<line2>RxopsMacroMatches <args>
+	command! -range=% -nargs=1 SL
+	      \ <line1>,<line2>RxopsSubstituteLines <args>
+	command! -range=% -nargs=1 SM
+	      \ <line1>,<line2>RxopsSubstituteMatches <args>
+<	Use `-bar` only on the commands without an argument (as the plugin
+	does): the other arguments may contain `|`. Check where a name comes
+	from with `:verbose command DL`.
+
+==============================================================================
+4. Mappings						*rxops-mappings*
+
+No keys are mapped by default. In Normal mode a mapping works on the whole
+buffer, in Visual mode on the selected lines.
+
+<Plug> mapping					command ~
+<Plug>(rxops-delete-lines)			|:RxopsDeleteLines|
+<Plug>(rxops-keep-lines)			|:RxopsKeepLines|
+<Plug>(rxops-delete-matches)			|:RxopsDeleteMatches|
+<Plug>(rxops-keep-matches)			|:RxopsKeepMatches|
+<Plug>(rxops-yank-lines)			|:RxopsYankLines|
+<Plug>(rxops-yank-matches)			|:RxopsYankMatches|
+<Plug>(rxops-qf-lines)				|:RxopsQuickfixLines|
+<Plug>(rxops-qf-unmatched-lines)		|:RxopsQuickfixLines| with !
+<Plug>(rxops-loclist-lines)			|:RxopsLoclistLines|
+<Plug>(rxops-loclist-unmatched-lines)		|:RxopsLoclistLines| with !
+<Plug>(rxops-qf-matches)			|:RxopsQuickfixMatches|
+<Plug>(rxops-loclist-matches)			|:RxopsLoclistMatches|
+<Plug>(rxops-align-matches)			|:RxopsAlignMatches| (no arg)
+<Plug>(rxops-fold-lines)		|:RxopsFoldLines| (Normal only)
+<Plug>(rxops-macro-lines)			|:RxopsMacroLines| (*)
+<Plug>(rxops-macro-unmatched-lines)		|:RxopsMacroLines| with ! (*)
+<Plug>(rxops-macro-matches)			|:RxopsMacroMatches| (*)
+<Plug>(rxops-substitute-lines)			|:RxopsSubstituteLines| (*)
+<Plug>(rxops-substitute-matches)		|:RxopsSubstituteMatches| (*)
+
+(*) These stop on the command line for the argument: `:RxopsMacroLines `
+or `:RxopsSubstituteLines /` (`:'<,'>RxopsSubstituteLines /` in Visual
+mode). Type the rest and press <CR>.
+
+Example: everything under <Leader>/ >
+	for [s:key, s:name] in [['d', 'delete-lines'], ['D', 'keep-lines'],
+	      \ ['x', 'delete-matches'], ['k', 'keep-matches'],
+	      \ ['Y', 'yank-lines'], ['y', 'yank-matches'],
+	      \ ['q', 'qf-lines'], ['l', 'loclist-lines'],
+	      \ ['Q', 'qf-matches'], ['a', 'align-matches'],
+	      \ ['@', 'macro-lines'], ['m', 'macro-matches'],
+	      \ ['sl', 'substitute-lines'], ['sm', 'substitute-matches']]
+	  execute printf('nmap <Leader>/%s <Plug>(rxops-%s)', s:key, s:name)
+	  execute printf('xmap <Leader>/%s <Plug>(rxops-%s)', s:key, s:name)
+	endfor
+	nmap <Leader>/f <Plug>(rxops-fold-lines)
+<
+==============================================================================
+5. Options						*rxops-options*
+
+There are no options.
+
+							*g:loaded_rxops*
+Set `g:loaded_rxops` to 1 before the plugin loads to disable it.
+
+==============================================================================
+6. Functions						*rxops-functions*
+
+The commands call these. Each returns a Result Dictionary and reports it
+once (so a caller does not need to):
+	ok	|v:true| on success
+	code	'' on success, else one of `no_pattern`, `bad_spec`,
+		`bad_flags`, `bad_register`, `bad_args`, `no_easyalign`,
+		`vim_error`, `macro_error` (a run of the macro gave an
+		error and the command stopped; Vim has shown the error),
+		`macro_failed` (the command went through, but motions
+		failed in some runs; see |rxops-macro-failures|)
+	error	details (the Vim error for `vim_error`, `macro_error`)
+	count	lines or matches handled (0: nothing matched). Always 0
+		for substitute_lines(), align_matches() and fold_lines()
+		when it restores. For the macro functions: the runs that
+		finished.
+	failed	(macro functions only) runs that failed
+	runs	(macro functions only) runs started
+	changed	|v:true| when the buffer was changed
+{line1} and {line2} are line numbers; {invert} and {loc} are 0 or 1.
+
+rxops#delete_lines({line1}, {line2})			*rxops#delete_lines()*
+rxops#keep_lines({line1}, {line2})			*rxops#keep_lines()*
+rxops#delete_matches({line1}, {line2})		*rxops#delete_matches()*
+rxops#keep_matches({line1}, {line2})			*rxops#keep_matches()*
+rxops#yank_lines({line1}, {line2})			*rxops#yank_lines()*
+rxops#yank_matches({line1}, {line2})			*rxops#yank_matches()*
+rxops#list_lines({line1}, {line2}, {invert}, {loc})	*rxops#list_lines()*
+	{loc} 0: quickfix list, 1: location list.
+rxops#list_matches({line1}, {line2}, {loc})		*rxops#list_matches()*
+rxops#align_matches({line1}, {line2}, {args})	*rxops#align_matches()*
+rxops#fold_lines()					*rxops#fold_lines()*
+	The Result also has `action`: "narrow", "restored",
+	"restored_opts" or "reset".
+rxops#macro_lines({line1}, {line2}, {invert}, {reg})	*rxops#macro_lines()*
+rxops#macro_matches({line1}, {line2}, {reg})	*rxops#macro_matches()*
+                                                    *rxops#substitute_lines()*
+rxops#substitute_lines({line1}, {line2}, {spec})
+rxops#substitute_matches({line1}, {line2}, {spec})
+						*rxops#substitute_matches()*
+	{spec} is the argument of the command, e.g. "/foo/bar/g".
+
+Mappings should use the commands or <Plug> mappings: when the plugin is
+loaded on demand the functions do not exist yet (E117).
+
+==============================================================================
+7. Registers and messages				*rxops-registers*
+
+Deleted and yanked lines or matches go linewise to the unnamed register
+|quotequote|, so |p| puts them. As with |y| and |d|:
+- Yanked text (|:RxopsYankLines|, |:RxopsYankMatches|) also goes to
+  |quote0|.
+- Deleted text (|:RxopsDeleteLines|, |:RxopsKeepLines|,
+  |:RxopsDeleteMatches|) goes to |quote1|: "1 to "8 move to "2 to "9
+  first, "" points to "1, and "0 keeps the last yank. Everything one
+  command deletes is one register (the typed `:g//d` shifts once per
+  line). Unlike a delete of Vim, they do not trigger |TextYankPost|.
+If 'clipboard' contains "unnamedplus" the lines also go to |quoteplus|,
+and if it contains "unnamed" to |quotestar|. With both, yanked text goes
+to both, as for |y|; deleted text goes where |d| puts it: only to
+|quoteplus| in Vim (|clipboard-unnamedplus|), to both in Neovim.
+|:RxopsKeepMatches| does not touch registers. When |:RxopsDeleteLines| or
+|:RxopsKeepLines| stops on an error, the lines deleted so far are still put
+in the registers, and only those.
+
+Messages start with `[rxops] `, are kept in |:messages| and are at most 50
+columns, so that they cause no |hit-enter| prompt in an 80-column Vim with
+'showcmd' and 'ruler' (longer Vim errors are cut and end in `...`; the full
+text is in the Result). Errors use |hl-ErrorMsg|.
+
+==============================================================================
+8. Privacy						*rxops-privacy*
+
+Nothing is sent anywhere. |:RxopsFoldLines| writes a view file to a
+|tempname()| in a named buffer and deletes it when the folds are
+restored.
+
+==============================================================================
+9. Limitations						*rxops-limitations*
+
+- Vim puts |@/| back when the outermost function returns. A macro run by
+  |:RxopsMacroLines| or |:RxopsMacroMatches| that searches changes |@/| for
+  the rest of your function when you call `rxops#...()` from one. The other
+  commands do not change |@/| even then.
+- The commands add nothing to the search history and keep the last
+  substitute pattern and string that |:&| repeats (|:keeppatterns|).
+  Two exceptions:
+  - |:RxopsSubstituteLines| runs |:s| with your {string}, and Vim keeps
+    that {string} as the one `~` stands for in the {string} of a later
+    |:s| (|s~|). |:keeppatterns| does not cover it; |:&| is not changed.
+  - The macro of |:RxopsMacroLines| and |:RxopsMacroMatches| runs as when
+    you type it, not under |:keeppatterns|, so its own searches go into
+    the search history and its |:s| commands set the last substitute
+    string (the pattern is put back when the command returns).
+- An error in the macro is told from a failed motion by the message
+  history (|rxops-macro-failures|). Even with "history:" 20 or more, when
+  the same error text comes history+1 times in a row with nothing in
+  between (the history is then full of that line, and adding it changes
+  nothing), that run is taken as a failed motion: the command goes on and
+  warns.
+- Called inside a |:try|, an error in the macro becomes an exception (as
+  for any command under |:try|): it stops the macro, propagates out of
+  `rxops#macro_lines()` / `rxops#macro_matches()`, and no Result is
+  returned. Failed motions are no errors and are reported as usual.
+- |:RxopsFoldLines| tests each line with |expr-=~|. With patterns that
+  span lines (`\n`, `\_x`) or look at the position (`\%l`, `\%V`, `\%#`)
+  the folds may differ from what |:global| selects; the command then
+  says `folds may differ from :g for this pattern`. A search typed with
+  'nomagic' may also differ.
+- |:RxopsFoldLines| restores manual folds only in a named file that
+  keeps its name. The folds come back at their saved line numbers; folds
+  past the last line (after lines were deleted while narrowed) are
+  dropped.
+- |:RxopsFoldLines| keeps its state in the window, one per buffer: using
+  it on another buffer in the same window keeps the state of the first
+  buffer, and going back there and running it again restores that
+  buffer. Closing the window while narrowed leaves the (small) view file
+  in the |tempname()| directory until Vim exits; the view file of a
+  buffer that was wiped is deleted the next time the command runs in
+  that window.
+- `\=` in the {string} of the substitute commands is evaluated.
+- |:RxopsSubstituteMatches| replaces every match with itself even where
+  nothing changes, and |:RxopsDeleteMatches| deletes empty matches, so
+  the buffer can be marked modified (with an undo step) when nothing
+  changed (`0 matches changed`, `no matches`).
+- The minimum versions are from the features used (|<Cmd>|,
+  |setqflist()| with {what}); tests run on Vim 9.2 and Neovim 0.12 only.
+
+vim:tw=78:ts=8:ft=help:norl:
